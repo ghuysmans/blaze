@@ -142,7 +142,7 @@
  (name srv)
  (modules srv)
  (public_name blaze.srv)
- (libraries fpath sendmail.starttls rresult blaze.args colombe))
+ (libraries fpath sendmail.starttls rresult blaze.args colombe blaze.srv))
 
 (executable
  (name make)

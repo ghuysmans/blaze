@@ -1,4 +1,11 @@
 (library
  (name ldns)
+ (modules ldns)
  (public_name blaze.ldns)
  (libraries bos logs rresult dns dns-client.unix fpath astring))
+
+(library
+ (name srv)
+ (modules srv)
+ (public_name blaze.srv)
+ (libraries fpath sendmail.starttls rresult blaze.args colombe))
