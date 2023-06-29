@@ -80,6 +80,55 @@ module Value = struct
     | `No_recipients -> Fmt.string ppf "No recipients"
     | `Too_many_recipients -> Fmt.string ppf "Too many recipients"
     | `Invalid_recipients -> Fmt.string ppf "Invalid recipients"
+
+  type decoder = Decoder.decoder
+  type encoder = Encoder.encoder
+
+  let encode :
+      type a. encoder -> a send -> a -> (unit, [> Encoder.error ]) State.t =
+   fun encoder w v ->
+    let fiber : a send -> [> Encoder.error ] Encoder.state = function
+      | Payload ->
+          let k encoder =
+            Encoder.write v encoder ;
+            Encoder.write "\r\n" encoder ;
+            Encoder.flush (fun _ -> Encoder.Done) encoder in
+          Encoder.safe k encoder
+      | PP_220 -> Reply.Encoder.response (`PP_220 v) encoder
+      | PP_221 -> Reply.Encoder.response (`PP_221 v) encoder
+      | PP_250 -> Reply.Encoder.response (`PP_250 v) encoder
+      | TP_354 -> Reply.Encoder.response (`TP_354 v) encoder
+      | PN_503 -> Reply.Encoder.response (`PN_503 v) encoder
+      | Code ->
+          let code, txts = v in
+          Reply.Encoder.response (`Other (code, txts)) encoder in
+    let rec go = function
+      | Encoder.Done -> State.Return ()
+      | Encoder.Write { continue; buffer; off; len } ->
+          State.Write { k = go <.> continue; buffer; off; len }
+      | Encoder.Error err -> State.Error err in
+    (go <.> fiber) w
+
+  let decode : type a. decoder -> a recv -> (a, [> Decoder.error ]) State.t =
+   fun decoder w ->
+    let k : Request.t -> (a, [> Decoder.error ]) State.t =
+     fun v ->
+      match (w, v) with
+      | Helo, `Hello v -> Return v
+      | Data, `Data -> Return ()
+      | Quit, `Quit -> Return ()
+      | Payload, `Payload v -> Return v
+      | Payload, `Data_end -> Return "."
+      | Any, v -> Return v
+      | _, v ->
+          let v = Fmt.to_to_string Request.pp v in
+          Error (`Invalid_command v) in
+    let rec go = function
+      | Decoder.Done v -> k v
+      | Decoder.Read { buffer; off; len; continue } ->
+          State.Read { k = go <.> continue; buffer; off; len }
+      | Decoder.Error { error; _ } -> State.Error error in
+    go (Request.Decoder.request ~relax:true decoder)
 end
 
 module type MONAD = sig
@@ -204,58 +253,6 @@ let receive :
 
 let handle ~sockaddr ~domain flow =
   let open Colombe in
-  let module Value = struct
-    include Value
-
-    type decoder = Decoder.decoder
-    type encoder = Encoder.encoder
-
-    let encode :
-        type a. encoder -> a send -> a -> (unit, [> Encoder.error ]) State.t =
-     fun encoder w v ->
-      let fiber : a send -> [> Encoder.error ] Encoder.state = function
-        | Payload ->
-            let k encoder =
-              Encoder.write v encoder ;
-              Encoder.write "\r\n" encoder ;
-              Encoder.flush (fun _ -> Encoder.Done) encoder in
-            Encoder.safe k encoder
-        | PP_220 -> Reply.Encoder.response (`PP_220 v) encoder
-        | PP_221 -> Reply.Encoder.response (`PP_221 v) encoder
-        | PP_250 -> Reply.Encoder.response (`PP_250 v) encoder
-        | TP_354 -> Reply.Encoder.response (`TP_354 v) encoder
-        | PN_503 -> Reply.Encoder.response (`PN_503 v) encoder
-        | Code ->
-            let code, txts = v in
-            Reply.Encoder.response (`Other (code, txts)) encoder in
-      let rec go = function
-        | Encoder.Done -> State.Return ()
-        | Encoder.Write { continue; buffer; off; len } ->
-            State.Write { k = go <.> continue; buffer; off; len }
-        | Encoder.Error err -> State.Error err in
-      (go <.> fiber) w
-
-    let decode : type a. decoder -> a recv -> (a, [> Decoder.error ]) State.t =
-     fun decoder w ->
-      let k : Request.t -> (a, [> Decoder.error ]) State.t =
-       fun v ->
-        match (w, v) with
-        | Helo, `Hello v -> Return v
-        | Data, `Data -> Return ()
-        | Quit, `Quit -> Return ()
-        | Payload, `Payload v -> Return v
-        | Payload, `Data_end -> Return "."
-        | Any, v -> Return v
-        | _, v ->
-            let v = Fmt.to_to_string Request.pp v in
-            Error (`Invalid_command v) in
-      let rec go = function
-        | Decoder.Done v -> k v
-        | Decoder.Read { buffer; off; len; continue } ->
-            State.Read { k = go <.> continue; buffer; off; len }
-        | Decoder.Error { error; _ } -> State.Error error in
-      go (Request.Decoder.request ~relax:true decoder)
-  end in
   let module Monad = struct
     type context = State.Context.t
 
@@ -269,55 +266,6 @@ let handle_with_starttls ~tls ~sockaddr ~domain flow =
   let open Colombe in
   let module Value = struct
     include Value
-
-    type decoder = Decoder.decoder
-    type encoder = Encoder.encoder
-
-    let encode :
-        type a. encoder -> a send -> a -> (unit, [> Encoder.error ]) State.t =
-     fun encoder w v ->
-      let fiber : a send -> [> Encoder.error ] Encoder.state = function
-        | Payload ->
-            let k encoder =
-              Encoder.write v encoder ;
-              Encoder.write "\r\n" encoder ;
-              Encoder.flush (fun _ -> Encoder.Done) encoder in
-            Encoder.safe k encoder
-        | PP_220 -> Reply.Encoder.response (`PP_220 v) encoder
-        | PP_221 -> Reply.Encoder.response (`PP_221 v) encoder
-        | PP_250 -> Reply.Encoder.response (`PP_250 v) encoder
-        | TP_354 -> Reply.Encoder.response (`TP_354 v) encoder
-        | PN_503 -> Reply.Encoder.response (`PN_503 v) encoder
-        | Code ->
-            let code, txts = v in
-            Reply.Encoder.response (`Other (code, txts)) encoder in
-      let rec go = function
-        | Encoder.Done -> State.Return ()
-        | Encoder.Write { continue; buffer; off; len } ->
-            State.Write { k = go <.> continue; buffer; off; len }
-        | Encoder.Error err -> State.Error err in
-      (go <.> fiber) w
-
-    let decode : type a. decoder -> a recv -> (a, [> Decoder.error ]) State.t =
-     fun decoder w ->
-      let k : Request.t -> (a, [> Decoder.error ]) State.t =
-       fun v ->
-        match (w, v) with
-        | Helo, `Hello v -> Return v
-        | Data, `Data -> Return ()
-        | Quit, `Quit -> Return ()
-        | Payload, `Payload v -> Return v
-        | Payload, `Data_end -> Return "."
-        | Any, v -> Return v
-        | _, v ->
-            let v = Fmt.to_to_string Request.pp v in
-            Error (`Invalid_command v) in
-      let rec go = function
-        | Decoder.Done v -> k v
-        | Decoder.Read { buffer; off; len; continue } ->
-            State.Read { k = go <.> continue; buffer; off; len }
-        | Decoder.Error { error; _ } -> State.Error error in
-      go (Request.Decoder.request ~relax:true decoder)
 
     let encode_without_tls ctx v w =
       let rec go = function
