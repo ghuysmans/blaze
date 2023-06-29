@@ -31,8 +31,15 @@ let serve with_metadata kind sockaddr domain output =
     let flow, peer = Unix.accept socket in
     let res =
       match kind with
-      | `Clear -> run flow (handle ~sockaddr ~domain)
-      | `Tls tls -> run flow (handle_with_starttls ~tls ~sockaddr ~domain) |> lift
+      | `Clear ->
+        Colombe.State.Context.make () |>
+        handle ~sockaddr ~domain |>
+        run flow
+      | `Tls tls ->
+        Sendmail_with_starttls.Context_with_tls.make () |>
+        handle_with_starttls ~tls ~sockaddr ~domain |>
+        run flow |>
+        lift
     in
     match res with
     | Ok `Quit ->

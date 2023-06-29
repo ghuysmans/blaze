@@ -242,10 +242,9 @@ let handle ~sockaddr ~domain =
 
     include State.Scheduler (State.Context) (Value)
   end in
-  let ctx = State.Context.make () in
-  receive (module Monad) ~sockaddr ~domain ctx
+  receive (module Monad) ~sockaddr ~domain
 
-let handle_with_starttls ~tls ~sockaddr ~domain =
+let handle_with_starttls ~tls ~sockaddr ~domain ctx =
   let open Colombe in
   let module Value = struct
     include Value
@@ -267,7 +266,6 @@ let handle_with_starttls ~tls ~sockaddr ~domain =
     include
       State.Scheduler (Sendmail_with_starttls.Context_with_tls) (Value_with_tls)
   end in
-  let ctx = Sendmail_with_starttls.Context_with_tls.make () in
   let open Monad in
   let* command = recv ctx Any in
   match command with
