@@ -268,24 +268,14 @@ let handle_with_starttls ~tls ~sockaddr ~domain flow =
     include Value
 
     let encode_without_tls ctx v w =
-      let rec go = function
-        | State.Read { k; buffer; off; len } ->
-            State.Read { k = go <.> k; buffer; off; len }
-        | State.Write { k; buffer; off; len } ->
-            State.Write { k = go <.> k; buffer; off; len }
-        | State.Return v -> Return v
-        | State.Error err -> Error (`Protocol err) in
-      go (encode ctx v w)
+      State.reword_error
+        (fun err -> `Protocol err)
+        (encode ctx v w)
 
     let decode_without_tls ctx w =
-      let rec go = function
-        | State.Read { k; buffer; off; len } ->
-            State.Read { k = go <.> k; buffer; off; len }
-        | State.Write { k; buffer; off; len } ->
-            State.Write { k = go <.> k; buffer; off; len }
-        | State.Return v -> Return v
-        | State.Error err -> Error (`Protocol err) in
-      go (decode ctx w)
+      State.reword_error
+        (fun err -> `Protocol err)
+        (decode ctx w)
   end in
   let module Value_with_tls = Sendmail_with_starttls.Make_with_tls (Value) in
   let module Monad = struct
