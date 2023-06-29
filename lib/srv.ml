@@ -163,29 +163,14 @@ module type MONAD = sig
   val fail : 'err -> ('a, 'err) Colombe.State.t
 end
 
-let run : Unix.file_descr -> ('a, 'err) Colombe.State.t -> ('a, 'err) result =
- fun flow state ->
-  let rec go = function
-    | Colombe.State.Read { buffer; off; len; k } -> (
-        match Unix.read flow buffer off len with
-        | 0 -> (go <.> k) `End
-        | len -> (go <.> k) (`Len len))
-    | Colombe.State.Write { buffer; off; len; k } ->
-        let len = Unix.write flow (Bytes.unsafe_of_string buffer) off len in
-        (go <.> k) len
-    | Colombe.State.Return v -> Ok v
-    | Colombe.State.Error err -> Error err in
-  go state
-
 let receive :
     type ctx error.
     (module MONAD with type context = ctx and type error = error) ->
     sockaddr:Unix.sockaddr ->
     domain:'host Domain_name.t ->
-    Unix.file_descr ->
     ctx ->
     (_, [> `Protocol of error ]) Colombe.State.t =
- fun (module Monad) ~sockaddr ~domain flow ctx ->
+ fun (module Monad) ~sockaddr ~domain ctx ->
   let pp_sockaddr ppf = function
     | Unix.ADDR_INET (inet_addr, _) ->
         Fmt.string ppf (Unix.string_of_inet_addr inet_addr)
@@ -235,23 +220,22 @@ let receive :
         send ctx PN_503 [ "Command out of sequence." ] >>= fun () ->
         recipients ~from acc
   and mail ~from recipients buf =
-    run flow (recv ctx Payload) |> function
-    | Error err -> Colombe.State.Error err
-    | Ok ".." ->
+    recv ctx Payload >>= function
+    | ".." ->
         Buffer.add_char buf '.' ;
         mail ~from recipients buf
-    | Ok "." ->
+    | "." ->
         let* () = send ctx PP_250 [ "Mail sended, buddy!" ] in
         let* () = recv ctx Quit in
         let res = (domain_from, from, recipients, Buffer.contents buf) in
         politely_close (`Mail res)
-    | Ok str ->
+    | str ->
         Buffer.add_string buf str ;
         Buffer.add_string buf "\r\n" ;
         mail ~from recipients buf in
   go ()
 
-let handle ~sockaddr ~domain flow =
+let handle ~sockaddr ~domain =
   let open Colombe in
   let module Monad = struct
     type context = State.Context.t
@@ -259,10 +243,9 @@ let handle ~sockaddr ~domain flow =
     include State.Scheduler (State.Context) (Value)
   end in
   let ctx = State.Context.make () in
-  let res = receive (module Monad) ~sockaddr ~domain flow ctx in
-  run flow res
+  receive (module Monad) ~sockaddr ~domain ctx
 
-let handle_with_starttls ~tls ~sockaddr ~domain flow =
+let handle_with_starttls ~tls ~sockaddr ~domain =
   let open Colombe in
   let module Value = struct
     include Value
@@ -285,18 +268,16 @@ let handle_with_starttls ~tls ~sockaddr ~domain flow =
       State.Scheduler (Sendmail_with_starttls.Context_with_tls) (Value_with_tls)
   end in
   let ctx = Sendmail_with_starttls.Context_with_tls.make () in
-  let res =
-    let open Monad in
-    let* command = recv ctx Any in
-    match command with
-    | `Verb ("STARTTLS", []) ->
-        let* () = send ctx PP_220 [ "Go ahead buddy!" ] in
-        let decoder = Sendmail_with_starttls.Context_with_tls.decoder ctx in
-        let tls_error err = `Tls err in
-        Value_with_tls.starttls_as_server decoder tls |> reword_error tls_error
-        >>= fun () -> receive (module Monad) ~sockaddr ~domain flow ctx
-    | _ -> assert false in
-  run flow res
+  let open Monad in
+  let* command = recv ctx Any in
+  match command with
+  | `Verb ("STARTTLS", []) ->
+      let* () = send ctx PP_220 [ "Go ahead buddy!" ] in
+      let decoder = Sendmail_with_starttls.Context_with_tls.decoder ctx in
+      let tls_error err = `Tls err in
+      Value_with_tls.starttls_as_server decoder tls |> reword_error tls_error
+      >>= fun () -> receive (module Monad) ~sockaddr ~domain ctx
+  | _ -> assert false
 
 type tls_error =
   [ `Tls_alert of Tls.Packet.alert_type

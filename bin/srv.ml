@@ -1,6 +1,20 @@
 open Srv
 open Rresult
 
+let run : Unix.file_descr -> ('a, 'err) Colombe.State.t -> ('a, 'err) result =
+ fun flow state ->
+  let rec go = function
+    | Colombe.State.Read { buffer; off; len; k } -> (
+        match Unix.read flow buffer off len with
+        | 0 -> (go <.> k) `End
+        | len -> (go <.> k) (`Len len))
+    | Colombe.State.Write { buffer; off; len; k } ->
+        let len = Unix.write flow (Bytes.unsafe_of_string buffer) off len in
+        (go <.> k) len
+    | Colombe.State.Return v -> Ok v
+    | Colombe.State.Error err -> Error err in
+  go state
+
 let serve with_metadata kind sockaddr domain output =
   let socket =
     Unix.socket (Unix.domain_of_sockaddr sockaddr) Unix.SOCK_STREAM 0 in
@@ -17,8 +31,8 @@ let serve with_metadata kind sockaddr domain output =
     let flow, peer = Unix.accept socket in
     let res =
       match kind with
-      | `Clear -> handle ~sockaddr ~domain flow
-      | `Tls tls -> handle_with_starttls ~tls ~sockaddr ~domain flow |> lift
+      | `Clear -> run flow (handle ~sockaddr ~domain)
+      | `Tls tls -> run flow (handle_with_starttls ~tls ~sockaddr ~domain) |> lift
     in
     match res with
     | Ok `Quit ->
